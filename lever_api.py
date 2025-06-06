@@ -325,7 +325,7 @@ class LeverAPI:
                     "posting_id": posting_id,
                     "archived": "false",
                     "stage_id": new_applicant_stage_id,
-                    "limit": ,
+                    "limit": 25,
                     "sort": "-createdAt"
                 },
                 headers=self.headers
