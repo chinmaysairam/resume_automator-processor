@@ -405,12 +405,13 @@ def process_local_resumes():
         
         # Initialize batch processing variables
         batch_size = 50
+        max_resumes = 600  # Maximum number of resumes to process
         offset = 0
         total_processed = 0
         total_failed = 0
         total_skipped = 0
         
-        while True:
+        while total_processed + total_skipped < max_resumes:
             # Download batch of resumes
             downloaded_resumes = lever_api.download_resume(
                 posting_id=target_job_config.job_posting,
@@ -437,6 +438,11 @@ def process_local_resumes():
             skipped_count = 0
             
             for resume_bytes, candidate_id, candidate_name in downloaded_resumes:
+                # Check if we've reached the maximum limit
+                if total_processed + total_skipped + processed_count + skipped_count >= max_resumes:
+                    logging.info(f"Reached maximum limit of {max_resumes} resumes")
+                    break
+                    
                 logging.info(f"\nProcessing resume {processed_count + 1}/{len(downloaded_resumes)}: {candidate_id} ({candidate_name})")
                 # Check if already processed
                 if is_already_processed(sheets_api, spreadsheet_id, job_posting_id, candidate_id):
@@ -504,6 +510,9 @@ def process_local_resumes():
             logging.info(f"- Successfully processed: {processed_count}")
             logging.info(f"- Failed to process: {failed_count}")
             logging.info(f"- Skipped (already processed): {skipped_count}")
+            logging.info(f"- Total processed so far: {total_processed}")
+            logging.info(f"- Total skipped so far: {total_skipped}")
+            logging.info(f"- Remaining until max limit: {max_resumes - (total_processed + total_skipped)}")
             
             # Move to next batch
             offset += batch_size
@@ -517,6 +526,7 @@ def process_local_resumes():
         logging.info(f"- Total processed: {total_processed}")
         logging.info(f"- Total failed: {total_failed}")
         logging.info(f"- Total skipped: {total_skipped}")
+        logging.info(f"- Maximum limit: {max_resumes}")
         
     except Exception as e:
         logging.error(f"Error in process_local_resumes: {str(e)}")
