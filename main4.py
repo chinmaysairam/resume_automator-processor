@@ -402,84 +402,122 @@ def process_local_resumes():
         logging.info(f"\nRecruiter Prompt:\n{target_job_config.recruiter_prompt[:200]}...")
         logging.info("-" * 50)
         lever_api = LeverAPI(os.getenv("LEVER_API_KEY"))
-        downloaded_resumes = lever_api.download_resume(posting_id=target_job_config.job_posting)
-        if not downloaded_resumes:
-            logging.error("No resumes were downloaded from Lever for this job posting.")
-            return
-        logging.info(f"Downloaded {len(downloaded_resumes)} resumes from Lever (in memory).")
-        resume_processor = LocalResumeProcessor(
-            candidates_dir=None  # Not used for in-memory
-        )
-        total_candidates = len(downloaded_resumes)
-        if total_candidates == 0:
-            logging.error("No resumes found to process")
-            return
-        logging.info(f"Found {total_candidates} resumes to process (in memory)")
-        if not quota_manager.can_make_request():
-            logging.error("Free tier quota exceeded for today. Please try again tomorrow.")
-            return
-        results = []
-        processed_count = 0
-        failed_count = 0
-        skipped_count = 0
         
-        for resume_bytes, candidate_id, candidate_name in downloaded_resumes:
-            logging.info(f"\nProcessing resume {processed_count + 1}/{total_candidates}: {candidate_id} ({candidate_name})")
-            # Check if already processed
-            if is_already_processed(sheets_api, spreadsheet_id, job_posting_id, candidate_id):
-                logging.info(f"Skipping {candidate_id} - already processed")
-                skipped_count += 1
-                continue
+        # Initialize batch processing variables
+        batch_size = 50
+        offset = 0
+        total_processed = 0
+        total_failed = 0
+        total_skipped = 0
+        
+        while True:
+            # Download batch of resumes
+            downloaded_resumes = lever_api.download_resume(
+                posting_id=target_job_config.job_posting,
+                limit=batch_size,
+                offset=offset
+            )
+            
+            if not downloaded_resumes:
+                logging.info(f"No more resumes to process after offset {offset}")
+                break
+                
+            logging.info(f"Downloaded batch of {len(downloaded_resumes)} resumes from Lever (in memory).")
+            resume_processor = LocalResumeProcessor(
+                candidates_dir=None  # Not used for in-memory
+            )
+            
             if not quota_manager.can_make_request():
-                logging.error(f"Free tier quota exceeded. Processed {processed_count} out of {total_candidates} resumes.")
-                logging.info("Saving partial results and stopping.")
-                save_results(results)
-                return
-            try:
-                resume_text = resume_processor.convert_pdf_to_text(resume_bytes)
-                if not resume_text:
-                    logging.error(f"Could not parse resume for {candidate_id}")
-                    failed_count += 1
+                logging.error("Free tier quota exceeded for today. Please try again tomorrow.")
+                break
+                
+            results = []
+            processed_count = 0
+            failed_count = 0
+            skipped_count = 0
+            
+            for resume_bytes, candidate_id, candidate_name in downloaded_resumes:
+                logging.info(f"\nProcessing resume {processed_count + 1}/{len(downloaded_resumes)}: {candidate_id} ({candidate_name})")
+                # Check if already processed
+                if is_already_processed(sheets_api, spreadsheet_id, job_posting_id, candidate_id):
+                    logging.info(f"Skipping {candidate_id} - already processed")
+                    skipped_count += 1
                     continue
-                quota_manager.increment_request()
-                evaluation = evaluate_resume(
-                    job_description=target_job_config.job_description,
-                    recruiter_prompt=target_job_config.recruiter_prompt,
-                    candidate_resume=resume_text
-                )
-                results.append({
-                    "candidate_id": candidate_id,
-                    "decision": evaluation["decision"],
-                    "score": evaluation["score"],
-                    "scores": evaluation["scores"],
-                    "explanation": evaluation["explanation"]
-                })
-                sheets_api.log_result(
-                    spreadsheet_id,
-                    target_job_config.job_description,
-                    candidate_id,
-                    evaluation["decision"],
-                    evaluation["explanation"]
-                )
-                # Log the processed candidate
-                log_processed_candidate(sheets_api, spreadsheet_id, job_posting_id, candidate_id)
-                processed_count += 1
-                logging.info(f"Decision for {candidate_id}: {evaluation['decision']}")
-            except Exception as e:
-                if "Free tier quota exceeded" in str(e):
-                    logging.error(f"Free tier quota exceeded. Processed {processed_count} out of {total_candidates} resumes.")
+                    
+                if not quota_manager.can_make_request():
+                    logging.error(f"Free tier quota exceeded. Processed {processed_count} out of {len(downloaded_resumes)} resumes in this batch.")
                     logging.info("Saving partial results and stopping.")
                     save_results(results)
                     return
-                logging.error(f"Error processing resume for {candidate_id}: {str(e)}")
-                failed_count += 1
-                continue
-        save_results(results)
-        logging.info(f"\nEvaluation complete:")
-        logging.info(f"- Total resumes: {total_candidates}")
-        logging.info(f"- Successfully processed: {processed_count}")
-        logging.info(f"- Failed to process: {failed_count}")
-        logging.info(f"- Skipped (already processed): {skipped_count}")
+                    
+                try:
+                    resume_text = resume_processor.convert_pdf_to_text(resume_bytes)
+                    if not resume_text:
+                        logging.error(f"Could not parse resume for {candidate_id}")
+                        failed_count += 1
+                        continue
+                        
+                    quota_manager.increment_request()
+                    evaluation = evaluate_resume(
+                        job_description=target_job_config.job_description,
+                        recruiter_prompt=target_job_config.recruiter_prompt,
+                        candidate_resume=resume_text
+                    )
+                    results.append({
+                        "candidate_id": candidate_id,
+                        "decision": evaluation["decision"],
+                        "score": evaluation["score"],
+                        "scores": evaluation["scores"],
+                        "explanation": evaluation["explanation"]
+                    })
+                    sheets_api.log_result(
+                        spreadsheet_id,
+                        target_job_config.job_description,
+                        candidate_id,
+                        evaluation["decision"],
+                        evaluation["explanation"]
+                    )
+                    # Log the processed candidate
+                    log_processed_candidate(sheets_api, spreadsheet_id, job_posting_id, candidate_id)
+                    processed_count += 1
+                    logging.info(f"Decision for {candidate_id}: {evaluation['decision']}")
+                except Exception as e:
+                    if "Free tier quota exceeded" in str(e):
+                        logging.error(f"Free tier quota exceeded. Processed {processed_count} out of {len(downloaded_resumes)} resumes in this batch.")
+                        logging.info("Saving partial results and stopping.")
+                        save_results(results)
+                        return
+                    logging.error(f"Error processing resume for {candidate_id}: {str(e)}")
+                    failed_count += 1
+                    continue
+                    
+            # Update totals
+            total_processed += processed_count
+            total_failed += failed_count
+            total_skipped += skipped_count
+            
+            # Save batch results
+            save_results(results)
+            
+            # Log batch summary
+            logging.info(f"\nBatch Summary (offset {offset}):")
+            logging.info(f"- Successfully processed: {processed_count}")
+            logging.info(f"- Failed to process: {failed_count}")
+            logging.info(f"- Skipped (already processed): {skipped_count}")
+            
+            # Move to next batch
+            offset += batch_size
+            
+            # If we got fewer resumes than the batch size, we're done
+            if len(downloaded_resumes) < batch_size:
+                break
+                
+        # Log final summary
+        logging.info(f"\nFinal Evaluation Summary:")
+        logging.info(f"- Total processed: {total_processed}")
+        logging.info(f"- Total failed: {total_failed}")
+        logging.info(f"- Total skipped: {total_skipped}")
+        
     except Exception as e:
         logging.error(f"Error in process_local_resumes: {str(e)}")
         import traceback

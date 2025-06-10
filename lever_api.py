@@ -305,7 +305,7 @@ class LeverAPI:
             print(f"❌ Failed to get tags for {opportunity_id}: {str(e)}")
             raise
 
-    def download_resume(self, posting_id: str = "225695e6-a447-4531-a9a6-af783325d22e") -> List[tuple[bytes, str, str]]:
+    def download_resume(self, posting_id: str = "225695e6-a447-4531-a9a6-af783325d22e", limit: int = 50, offset: int = 0) -> List[tuple[bytes, str, str]]:
         try:
             target_job = self.get_job_posting(posting_id)
             if not target_job:
@@ -325,7 +325,8 @@ class LeverAPI:
                     "posting_id": posting_id,
                     "archived": "false",
                     "stage_id": new_applicant_stage_id,
-                    "limit": 25,
+                    "limit": limit,
+                    "offset": offset,
                     "sort": "-createdAt"
                 },
                 headers=self.headers
